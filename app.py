@@ -147,7 +147,25 @@ elif page=='弱點分析':
         st.write('優先補強：', '、'.join(x['章節'] for x in rows[:3]))
         st.caption('題量極少，正確率只作為操作示範，不能預測考試成績。')
 
+
 elif page=='題庫來源':
+    
+    st.subheader("匯入100題練習題庫")
+    uploaded_file = st.file_uploader(
+        "選擇CSV題庫檔案",
+        type=["csv"]
+    )
+
+    if uploaded_file is not None:
+        if st.button("確認匯入題庫"):
+            try:
+                core.import_csv(uploaded_file.getvalue(), DB)
+                st.success("題庫匯入完成！")
+                st.rerun()
+            except Exception as e:
+                st.error(f"匯入失敗：{e}")
+
+
     st.subheader('題目驗證清單')
     for q in qs:
         with st.expander(f"#{q['id']}｜{q['verification']}｜{q['stem'][:22]}"):
