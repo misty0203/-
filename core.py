@@ -93,7 +93,11 @@ def import_csv(blob,db=DB):
  # transaction prevents partial imports
  with connect(db) as c:
   for d in data:
-   d={k:d.get(k,'') for k in FIELDS};d['points']=int(d['points'] or 10);d['tolerance']=float(d['tolerance'] or 0)
+   d={k:d.get(k,'') for k in FIELDS};d['points']=int(d['points'] or 10);d['tolerance']=float(d['tolerance'] or 0)  
+   if c.execute(
+                "SELECT 1 FROM questions WHERE stem = ? LIMIT 1", (d["stem"],)
+            ).fetchone():
+                continue
    c.execute('INSERT INTO questions('+','.join(FIELDS)+') VALUES('+','.join('?' for _ in FIELDS)+')',[d[k] for k in FIELDS])
  return len(data)
 
