@@ -1,4 +1,4 @@
-"""甲衛個人備考系統 V4: GitHub 固定題庫 + Supabase 雲端作答紀錄。
+"""甲衛個人備考系統 V5: GitHub 固定題庫 + Supabase 雲端作答紀錄。
 
 Only server-side code sees the sb_secret_ key. Login happens before any cloud read/write.
 Keep app.py, cloud_store.py, core.py, questions.csv in the same GitHub folder.
@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import io
 import random
+import sqlite3
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ import streamlit as st
 import core
 from cloud_store import CloudError, CloudStore, question_key
 
-st.set_page_config(page_title='甲衛備考 V4｜個人雲端版', page_icon='📘', layout='centered', initial_sidebar_state='collapsed')
+st.set_page_config(page_title='甲衛備考 V5｜專業情境題庫', page_icon='📘', layout='centered', initial_sidebar_state='collapsed')
 st.markdown('''<style>
 .block-container{max-width:760px;padding-top:1rem;padding-bottom:4rem}
 h1{font-size:1.5rem!important}h2,h3{font-size:1.17rem!important}
@@ -68,7 +69,7 @@ logout_col, info_col = st.columns([1, 4])
 if logout_col.button('登出'):
     st.session_state.signed_in = False
     st.rerun()
-info_col.caption('🔐 個人模式｜雲端紀錄已啟用')
+info_col.caption('🔐 個人模式｜雲端紀錄連線中')
 
 try:
     store = CloudStore(setting('SUPABASE_URL'), setting('SUPABASE_SECRET_KEY'))
@@ -80,20 +81,22 @@ except CloudError as err:
 
 # Build a clean, temporary question catalog for this browser session.
 # The old duplicate-filled SQLite file is not touched or deleted.
-if 'v4_db_path' not in st.session_state:
-    local_dir = tempfile.mkdtemp(prefix='oh_exam_v4_')
+if 'v5_db_path' not in st.session_state:
+    local_dir = tempfile.mkdtemp(prefix='oh_exam_v5_')
     path = Path(local_dir) / 'questions.db'
     try:
-        core.init(str(path))  # Original five demonstration questions.
+        core.init(str(path))  # Initialize schema, then remove seed exercises from this NEW TEMPORARY database only.
+        with sqlite3.connect(str(path)) as db:
+            db.execute('DELETE FROM questions')  # Does not touch Supabase or old study.db
         file = Path(__file__).with_name('questions.csv')
         if not file.is_file():
             raise RuntimeError('找不到 questions.csv，請將題庫 CSV 與 app.py 放在 GitHub 同一層。')
         core.import_csv(file.read_bytes(), str(path))  # De-duplicate by stem.
-        st.session_state.v4_db_path = str(path)
+        st.session_state.v5_db_path = str(path)
     except Exception as err:
         st.error('題庫載入失敗：' + str(err))
         st.stop()
-DB = st.session_state.v4_db_path
+DB = st.session_state.v5_db_path
 questions = core.get_questions(DB)
 by_id = {q['id']: q for q in questions}
 by_key = {question_key(q): q for q in questions}
@@ -141,27 +144,41 @@ def submit_answers(mode, items, started_at=None):
         return None
 
 
-st.title('📘 甲衛甲級｜診斷與補強')
-st.caption('V4 個人雲端版｜題庫由 GitHub 自動載入｜作答紀錄儲存在 Supabase')
-st.warning('題庫為自編練習題，並非官方歷屆原題；「計算已驗證」不代表持證專家完成審核。')
-PAGES = ['首頁與診斷', '章節練習', '錯題補強', '弱點分析', '題庫來源', '雲端紀錄']
+st.title('📘 甲衛甲級｜115新修法專業情境題')
+st.caption('V5 新修法專業情境題版｜題庫由 GitHub 自動載入｜作答紀錄儲存在 Supabase')
+st.warning(f'{len(questions)}題均為自編模擬題，非官方歷屆原題。自動計分僅供教學練習；未經獨立持證技師逐題審定。115-2官方原卷尚未完成逐題比對。')
+PAGES = ['首頁與診斷', '章節練習', '術科申論', '錯題補強', '弱點分析', '法規生效日', '題庫來源', '雲端紀錄']
 page = st.selectbox('功能選單', PAGES, label_visibility='collapsed')
 
 if page == '首頁與診斷':
     a, b = st.columns(2)
-    a.metric('題庫總數（已去重）', len(questions))
-    b.metric('可計分題數', len(eligible))
+    a.metric('專業情境題庫總數', len(questions))
+    b.metric('教學可計分題數', len(eligible))
     a, b = st.columns(2)
     a.metric('雲端累計計分作答', len(scored))
     b.metric('雲端正確率', f"{sum(bool(x['is_correct']) for x in scored)/len(scored):.0%}" if scored else '—')
-    st.subheader('正式難度診斷（自編練習）')
+    st.subheader('綜合診斷（非官方自編模擬）')
+    st.caption('混合法規／承攬／監測／化學管理／噪音與通風／跨領域計算；不只抽容許濃度公式。')
     if not eligible:
         st.info('目前沒有可計分題目。')
     else:
         limit = min(30, len(eligible))
         count = st.slider('本次抽題數', 1, limit, min(10, limit))
         if st.button('開始新測驗', type='primary'):
-            st.session_state.exam_ids = random.sample([q['id'] for q in eligible], count)
+            # Balanced-topic sampling to avoid domination by the longest chapter.
+            groups = collections.defaultdict(list)
+            for qq in eligible:
+                groups[qq['topic']].append(qq['id'])
+            selected = []
+            categories = list(groups.keys())
+            random.shuffle(categories)
+            for cat in categories:
+                if len(selected) >= count: break
+                selected.append(random.choice(groups[cat]))
+            remaining = [qq['id'] for qq in eligible if qq['id'] not in selected]
+            selected.extend(random.sample(remaining, min(count - len(selected), len(remaining))))
+            random.shuffle(selected)
+            st.session_state.exam_ids = selected
             st.session_state.exam_nonce = st.session_state.get('exam_nonce', 0) + 1
             st.session_state.exam_done = False
             st.session_state.exam_started = datetime.now().astimezone().isoformat()
@@ -201,7 +218,7 @@ elif page == '章節練習':
     topic = st.selectbox('選擇章節', sorted({q['topic'] for q in questions}))
     choices = [q for q in questions if q['topic'] == topic]
     q = st.selectbox('題目', choices, format_func=lambda item: f"#{item['id']}｜{item['kind']}｜{item['stem'][:40]}")
-    st.caption('計算已驗證的自編數值題可計分；待複核題僅保留作答、不計入正式分數。')
+    st.caption('「自編教學核對」的選擇題會教學自動計分，但不是官方／持證技師審定分數；申論題須人工評閱。')
     with st.form('practice_form'):
         response = answer_widget(q, 'practice_' + str(q['id']))
         submit = st.form_submit_button('提交並存入雲端')
@@ -223,6 +240,27 @@ elif page == '章節練習':
             st.warning('本題待人工複核，已保留作答但不計分。')
         st.write(result['feedback'])
         show_reference(q)
+
+elif page == '術科申論':
+    essays = [q for q in questions if q['kind'] == '申論']
+    st.subheader('術科申論｜20分案例題')
+    st.info('申論作答可寫入雲端供日後檢視，系統不會以關鍵字假裝人工評分。請對照參考擬答與配分規準自行檢核。')
+    item = st.selectbox('選擇術科題', essays, format_func=lambda q: q['stem'][:38])
+    with st.form('essay_case'):
+        st.markdown(item['stem'])
+        response = st.text_area('依術科答題格式分點作答（可留空補交）', height=240)
+        send = st.form_submit_button('儲存本次申論至雲端', type='primary')
+    if send:
+        saved = submit_answers('術科申論', [(item, response)])
+        if saved:
+            st.success('申論答案已備存；不自動計分。')
+            st.session_state.essay_saved = question_key(item)
+    if st.button('顯示參考擬答與配分規準'):
+        st.markdown('**參考擬答（自編，待持證技師審查）**')
+        st.write(item['answer'])
+        st.markdown('**20分參考配分規準**')
+        st.write(item.get('rubric') or '待人工評閱')
+        show_reference(item)
 
 elif page == '錯題補強':
     latest = {}
@@ -262,13 +300,33 @@ elif page == '弱點分析':
         st.bar_chart({row['章節']: row['正確率％'] for row in rows})
         st.write('優先補強：', '、'.join(row['章節'] for row in rows[:3]))
 
+elif page == '法規生效日':
+    st.subheader('115年7月1日修法：分期施行提醒')
+    st.warning('題目以115年10月17日已生效規定為現行基準；延後生效部分會寫明日期。考試以應試當天法規及命題公告為準。')
+    schedule = [
+        {'法規/條次':'職業安全衛生法114年修正條文','生效':'115-07-01','備註':'包含工程風險、承攬告知、職場霸凌'},
+        {'法規/條次':'職業安全衛生管理辦法（風險評估第12-1條）','生效':'115-07-01','備註':'工作前事前風險評估'},
+        {'法規/條次':'營造安全衛生設施標準第11-2條','生效':'116-07-01','備註':'115-10尚未生效'},
+        {'法規/條次':'工程安全設計及整體工程統合管理辦法部分條款','生效':'116-07-01／117-07-01','備註':'依附表三與各條核對'},
+        {'法規/條次':'勞工作業環境監測實施辦法部分新條文','生效':'116-01-01','備註':'第6、10、13等部分條項／附表'},
+        {'法規/條次':'勞工作業場所容許暴露標準部分附表','生效':'116-01-01','備註':'附表一部分項次、附表二'},
+        {'法規/條次':'勞工健康保護規則部分條文','生效':'116-07-01／117-01-01','備註':'依第29條核對'},
+        {'法規/條次':'化學品標示及通識規則部分新附表','生效':'118-01-01','備註':'第5條附表一、第12條附表四'},
+    ]
+    st.dataframe(schedule, hide_index=True, use_container_width=True)
+    st.link_button('查看職安署修法分期施行官方說明','https://www.osha.gov.tw/48110/48713/207079/207115/207278/post')
+    st.link_button('查看最近一次已公布的甲衛原卷索引','https://www.oshbon.com.tw/license/OshSkillTest/QuestionBank')
+    st.caption('115-2原卷目前未能完整讀取，故不宣稱排除所有重複考點。')
+
 elif page == '題庫來源':
     st.success('系統已從 GitHub 的 questions.csv 自動載入，無須再手動匯入。')
     st.write(f'本次去重後題庫：**{len(questions)} 題**；可計分：**{len(eligible)} 題**。')
     st.caption('原先重複匯入的本機 SQLite 資料庫不會被刪除；新版使用乾淨的題庫副本。')
     topic = st.selectbox('檢視章節', ['全部'] + sorted({q['topic'] for q in questions}))
     filtered = questions if topic == '全部' else [q for q in questions if q['topic'] == topic]
-    for q in filtered:
+    total_pages = max(1, (len(filtered) + 19)//20)
+    p = st.number_input('檢視頁數（每頁20題）', min_value=1, max_value=total_pages, value=1, step=1)
+    for q in filtered[(p-1)*20:p*20]:
         with st.expander(f"#{q['id']}｜{q['verification']}｜{q['stem'][:31]}"):
             show_reference(q)
 

@@ -2,7 +2,7 @@ import csv, io, json, sqlite3, datetime, math
 from pathlib import Path
 DB=Path(__file__).with_name('study.db')
 FIELDS=['topic','kind','stem','options','answer','explanation','source','source_url','source_type','source_year','source_number','law_reference','law_version','verification','verification_note','points','tolerance','rubric']
-VERIFICATIONS=['官方已核對','計算已驗證','待人工複核','答案有爭議']
+VERIFICATIONS=['官方已核對','計算已驗證','自編教學核對','待人工複核','答案有爭議']
 TYPES=['官方原題','官方法規衍生題','自編計算題','AI補強題','自編概念題']
 KINDS=['單選','複選','是非','數值','填空','申論']
 
@@ -51,7 +51,7 @@ def add_question(d,db=DB):
 def get_questions(db=DB):
  with connect(db) as c:return [dict(r) for r in c.execute('SELECT * FROM questions ORDER BY id')]
 
-def eligible(q):return q['verification'] in ('官方已核對','計算已驗證') and q['kind']!='申論'
+def eligible(q):return q['verification'] in ('官方已核對','計算已驗證','自編教學核對') and q['kind']!='申論'
 
 def grade(q,answer):
  kind=q['kind'];expected=str(q['answer']).strip();got=str(answer).strip()
@@ -93,11 +93,9 @@ def import_csv(blob,db=DB):
  # transaction prevents partial imports
  with connect(db) as c:
   for d in data:
-   d={k:d.get(k,'') for k in FIELDS};d['points']=int(d['points'] or 10);d['tolerance']=float(d['tolerance'] or 0)  
-   if c.execute(
-                "SELECT 1 FROM questions WHERE stem = ? LIMIT 1", (d["stem"],)
-            ).fetchone():
-                continue
+   d={k:d.get(k,'') for k in FIELDS};d['points']=int(d['points'] or 10);d['tolerance']=float(d['tolerance'] or 0)
+   if c.execute('SELECT 1 FROM questions WHERE kind=? AND stem=? LIMIT 1',(d['kind'],d['stem'])).fetchone():
+    continue
    c.execute('INSERT INTO questions('+','.join(FIELDS)+') VALUES('+','.join('?' for _ in FIELDS)+')',[d[k] for k in FIELDS])
  return len(data)
 
